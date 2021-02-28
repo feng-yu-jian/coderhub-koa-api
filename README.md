@@ -1,3 +1,19 @@
+# 基于 koa 框架开发的服务器接口
+
+## 0. 项目简介
+
+> 使用 koa 框架开发的服务器接口项目，仓库包含`sql`文件
+
+项目已经完成功能如下：
+
+- 用户注册/登录
+- 发布/修改动态
+- 发布/修改评论
+- 标签增加/获取
+- 上传头像/动态配图
+
+
+
 ## 1.项目配置
 
 ### 在项目主入口文件中创建并启动服务器
@@ -709,9 +725,18 @@ async getCommentsByMomentId(momentId) {
 
 ## 6.标签接口开发
 
+创建标签表
 
-
-创建标签的表
+```sql
+CREATE TABLE `label` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(10) NOT NULL,
+  `createAt` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updateAt` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `name` (`name`)
+) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+```
 
 定义创建标签接口
 
@@ -721,18 +746,17 @@ async getCommentsByMomentId(momentId) {
 
 创建标签和动态关系表
 
-```
-定义接口:
-
-作用：给动态添加标签
-
-请求：POST
-
-接口：moment/1/labels
-
-参数：labels
-
-例子：body { labels: ["前端"] }
+```sql
+CREATE TABLE `moment_label` (
+  `moment_id` int NOT NULL,
+  `label_id` int NOT NULL,
+  `createAt` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updateAt` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`moment_id`,`label_id`),
+  KEY `label_id` (`label_id`),
+  CONSTRAINT `moment_label_ibfk_1` FOREIGN KEY (`moment_id`) REFERENCES `moment` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `moment_label_ibfk_2` FOREIGN KEY (`label_id`) REFERENCES `label` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
 定义给动态添加标签的接口
@@ -744,11 +768,53 @@ async getCommentsByMomentId(momentId) {
 - 查询动态列表，展示标签数量
 - 查询动态详情，展示标签列表
 
+```js
+labelRouter.post('/', verifyAuth, create);
+labelRouter.get('/', list);
+
+const service = require('../service/label.service');
+class LabelController {
+  async create(ctx, next) {
+    const { name } = ctx.request.body;
+    const result = await service.create(name);
+    ctx.body = result;
+  }
+
+  async list(ctx, next) {
+    const { limit, offset } = ctx.query;
+    const result = await service.getLabels(limit, offset);
+    ctx.body = result;
+  }
+}
+
+class LabelService {
+  async create(name) {
+    const statement = `INSERT INTO label (name) VALUES (?);`;
+    const [result] = await connection.execute(statement, [name]);
+    return result;
+  }
+  async getLabelByName(name) {
+    const statement = `SELECT * FROM label WHERE name = ?;`;
+    const [result] = await connection.execute(statement, [name]);
+    return result[0];
+  }
+  async getLabels(limit, offset) {
+    const statement = `SELECT * FROM label LIMIT ?, ?;`;
+    const [result] = await connection.execute(statement, [offset, limit]);
+    return result;
+  }
+}
+```
 
 
-## 7.上传头像图片
 
-上传头像逻辑
+
+
+
+
+## 7.上传图片
+
+### 1.上传头像逻辑
 
 - 定义上传图像的接口
 - 定义获取图像的接口
@@ -768,13 +834,70 @@ async getCommentsByMomentId(momentId) {
 
 ​	avatarURL: 头像的地址
 
+```js
+fileRouter.post('/avatar', verifyAuth, avatarHandler, saveAvatarInfo);
+
+const avatarUpload = Multer({
+  dest: AVATAR_PATH
+});
+const avatarHandler = avatarUpload.single('avatar');
+
+async saveAvatarInfo(ctx, next) {
+  // 1.获取图像相关的信息
+  const { filename, mimetype, size } = ctx.req.file;
+  const { id } = ctx.user;
+
+  // 2.将图像信息数据保存到数据库中
+  const result = await fileService.createAvatar(filename, mimetype, size, id);
+
+  // 3.将图片地址保存到user表中
+  const avatarUrl = `${APP_HOST}:${APP_PORT}/users/${id}/avatar`;
+  await userService.updateAvatarUrlById(avatarUrl, id);
+
+  // 4.返回结果
+  ctx.body = '上传头像成功~';
+}
+
+async updateAvatarUrlById(avatarUrl, userId) {
+  const statement = `UPDATE user SET avatar_url = ? WHERE id = ?;`;
+  const [result] = await connection.execute(statement, [avatarUrl, userId]);
+  return result;
+}
+
+async createAvatar(filename, mimetype, size, userId) {
+  const statement = `INSERT INTO avatar (filename, mimetype, size, user_id) VALUES (?, ?, ?, ?)`;
+  const [result] = await connection.execute(statement, [filename, mimetype, size, userId]);
+  return result;
+}
+```
+
 4.获取信息时，获取用户的头像
 
+```js
+userRouter.get('/:userId/avatar', avatarInfo);
+
+async avatarInfo(ctx, next) {
+  // 1.用户的头像是哪一个文件呢?
+  const { userId } = ctx.params;
+  const avatarInfo = await fileService.getAvatarByUserId(userId);
+
+  // 2.提供图像信息
+  ctx.response.set('content-type', avatarInfo.mimetype);
+  ctx.body = fs.createReadStream(`${AVATAR_PATH}/${avatarInfo.filename}`);
+}
+
+async getAvatarByUserId(userId) {
+  const statement = `SELECT * FROM avatar WHERE user_id = ?;`;
+  const [result] = await connection.execute(statement, [userId]);
+  return result.pop();
+}
+```
 
 
 
 
-**上传动态的配图**
+
+### 2.上传动态的配图
 
 上传动态配图
 
@@ -782,7 +905,85 @@ async getCommentsByMomentId(momentId) {
 - 定义获取动态配图的接口
 - 获取动态时，获取配图信息
 
+```js
+fileRouter.post('/picture', verifyAuth, pictureHandler, pictureResize, savePictureInfo);
 
+const Multer = require('koa-multer');
+const Jimp = require('jimp');
+
+const pictureUpload = Multer({
+  dest: PICTURE_PATH
+});
+const pictureHandler = pictureUpload.array('picture', 9);
+
+const pictureResize = async (ctx, next) => {
+  try {
+    // 1.获取所有的图像信息
+    const files = ctx.req.files;
+
+    // 2.对图像进行处理(sharp/jimp)
+    for (let file of files) {
+      const destPath = path.join(file.destination, file.filename);
+      console.log(destPath);
+      Jimp.read(file.path).then(image => {
+        image.resize(1280, Jimp.AUTO).write(`${destPath}-large`);
+        image.resize(640, Jimp.AUTO).write(`${destPath}-middle`);
+        image.resize(320, Jimp.AUTO).write(`${destPath}-small`);
+      });
+    }
+
+    await next();
+  } catch (error) {
+    console.log(error);
+  }
+}
+
+async savePictureInfo(ctx, next) {
+  // 1.获取图像信息
+  const files = ctx.req.files;
+  const { id } = ctx.user;
+  const { momentId } = ctx.query;
+
+  // 2.将所有的文件信息保存到数据库中
+  for (let file of files) {
+    const { filename, mimetype, size } = file;
+    await fileService.createFile(filename, mimetype, size, id, momentId);
+  }
+
+  ctx.body = '动态配图上传完成~'
+}
+
+async createFile(filename, mimetype, size, userId, momentId) {
+  const statement = `INSERT INTO file (filename, mimetype, size, user_id, moment_id) VALUES (?, ?, ?, ?, ?)`;
+  const [result] = await connection.execute(statement, [filename, mimetype, size, userId, momentId]);
+  return result;
+}
+```
+
+
+
+```js
+momentRouter.get('/images/:filename', fileInfo);
+
+async fileInfo(ctx, next) {
+  let { filename } = ctx.params;
+  const fileInfo = await fileService.getFileByFilename(filename);
+  const { type } = ctx.query;
+  const types = ["small", "middle", "large"];
+  if (types.some(item => item === type)) {
+    filename = filename + '-' + type;
+  }
+
+  ctx.response.set('content-type', fileInfo.mimetype);
+  ctx.body = fs.createReadStream(`${PICTURE_PATH}/${filename}`);
+}
+
+async getFileByFilename(filename) {
+  const statement = `SELECT * FROM file WHERE filename = ?;`;
+  const [result] = await connection.execute(statement, [filename]);
+  return result[0];
+}
+```
 
 
 
